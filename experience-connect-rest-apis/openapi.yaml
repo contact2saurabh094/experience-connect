@@ -1,0 +1,293 @@
+openapi: 3.1.0
+info:
+  title: Experience Connect REST API
+  version: 1.0.0
+  description: >
+    JSON API for the Experience Connect learner and mentor app. Authentication uses
+    Laravel Sanctum bearer tokens. Checkout creates a booking only; no payment is processed.
+servers:
+  - url: http://127.0.0.1:8000/api
+security:
+  - bearerAuth: []
+paths:
+  /auth/register:
+    post:
+      security: []
+      summary: Register a learner account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, password_confirmation]
+              properties:
+                name: { type: string, minLength: 2, maxLength: 100 }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                password_confirmation: { type: string }
+      responses:
+        "201":
+          description: Account created; response includes user and bearer token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /auth/login:
+    post:
+      security: []
+      summary: Sign in with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Authenticated; returns a Sanctum token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /auth/logout:
+    post:
+      summary: Revoke the current bearer token
+      responses:
+        "200": { description: Token revoked. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+  /me:
+    get:
+      summary: Get the authenticated profile
+      responses:
+        "200":
+          description: User profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserEnvelope" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+  /me/role:
+    patch:
+      summary: Select learner or mentor mode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [learner, mentor] }
+      responses:
+        "200": { description: Updated profile. }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /mentors:
+    get:
+      security: []
+      summary: Search published mentor profiles
+      parameters:
+        - { name: search, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: skills, in: query, description: Comma-separated skill names, schema: { type: string } }
+        - { name: min_price, in: query, schema: { type: number, minimum: 0 } }
+        - { name: max_price, in: query, schema: { type: number, minimum: 0 } }
+        - { name: min_rating, in: query, schema: { type: number, minimum: 0, maximum: 5 } }
+        - { name: available, in: query, schema: { type: boolean } }
+        - { name: sort, in: query, schema: { type: string, enum: [rating, price, experience_years, name] } }
+        - { name: direction, in: query, schema: { type: string, enum: [asc, desc] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
+      responses:
+        "200": { description: Paginated mentor results in Laravel resource format. }
+  /mentors/{mentor}:
+    get:
+      security: []
+      summary: Get a published mentor profile
+      parameters:
+        - { name: mentor, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Mentor profile. }
+        "404": { description: Profile not found. }
+  /mentors/{mentor}/reviews:
+    get:
+      security: []
+      summary: List curated reviews for a published mentor profile
+      parameters:
+        - { name: mentor, in: path, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: Paginated reviews. }
+  /mentors/{mentor}/media:
+    get:
+      security: []
+      summary: List mentor videos and resources
+      parameters:
+        - { name: mentor, in: path, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: Paginated media and article metadata. }
+  /favorites:
+    get:
+      summary: List saved mentor profiles
+      responses:
+        "200": { description: Saved mentors. }
+        "403": { description: Learner role required. }
+  /favorites/{mentor}:
+    post:
+      summary: Save a mentor
+      parameters:
+        - { name: mentor, in: path, required: true, schema: { type: string } }
+      responses:
+        "201": { description: Mentor saved. }
+        "404": { description: Published mentor not found. }
+    delete:
+      summary: Remove a saved mentor
+      parameters:
+        - { name: mentor, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Favorite removed. }
+  /bookings:
+    get:
+      summary: List the authenticated learner's or mentor's bookings
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [Upcoming, Pending, Past, Cancelled] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: Paginated bookings. }
+    post:
+      summary: Book a 30-minute consultation (demo checkout; no payment)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mentor_id, scheduled_at, topic]
+              properties:
+                mentor_id: { type: string }
+                scheduled_at: { type: string, format: date-time }
+                topic: { type: string, minLength: 3, maxLength: 120 }
+      responses:
+        "201": { description: Booking persisted and confirmed. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /bookings/{booking}/cancel:
+    patch:
+      summary: Cancel an upcoming booking owned by the learner
+      parameters:
+        - { name: booking, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Booking cancelled. }
+        "403": { description: Booking is not cancellable by this user. }
+        "404": { description: Booking not found. }
+  /mentor/availability:
+    get:
+      summary: Read the authenticated mentor's weekly schedule
+      responses:
+        "200": { description: Seven Monday-first day entries and time slots. }
+        "403": { description: Mentor role required. }
+    put:
+      summary: Replace weekly availability
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [days]
+              properties:
+                days: { type: array, minItems: 7, maxItems: 7, items: { type: object } }
+      responses:
+        "200": { description: Updated weekly schedule. }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /mentor/requests:
+    get:
+      summary: List pending requests addressed to the current mentor
+      responses:
+        "200": { description: Paginated pending bookings. }
+        "403": { description: Mentor role required. }
+  /mentor/requests/{booking}:
+    patch:
+      summary: Accept or decline a request owned by the current mentor
+      parameters:
+        - { name: booking, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [accept, decline] }
+      responses:
+        "200": { description: Request updated. }
+        "403": { description: Request belongs to another mentor or is no longer pending. }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /mentor/dashboard:
+    get:
+      summary: Get server-computed mentor summary and upcoming sessions
+      responses:
+        "200": { description: Mentor dashboard values. }
+        "403": { description: Mentor role required. }
+  /notifications:
+    get:
+      summary: List the authenticated user's notifications
+      responses:
+        "200": { description: Paginated notifications. }
+  /notifications/read:
+    post:
+      summary: Mark all notifications for the current user as read
+      responses:
+        "200": { description: Notifications marked as read. }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum token
+  schemas:
+    User:
+      type: object
+      required: [id, name, email, role]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [learner, mentor] }
+    UserEnvelope:
+      type: object
+      properties:
+        data: { $ref: "#/components/schemas/User" }
+    AuthResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            user: { $ref: "#/components/schemas/User" }
+            token: { type: string }
+    Error:
+      type: object
+      properties:
+        message: { type: string }
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+  responses:
+    Unauthenticated:
+      description: Missing, invalid, or revoked bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: Invalid request input.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

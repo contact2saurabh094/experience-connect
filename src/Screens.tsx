@@ -29,6 +29,7 @@ import {
   X,
 } from 'lucide-react-native';
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -49,13 +50,14 @@ import {
   TextLabel,
 } from './components';
 import {
-  mentors as allMentors,
-  notifications,
-  requestSeed,
-  timeSlots,
   weekdays,
+  type AppNotification,
+  type MentorDashboard,
   type Booking,
   type Mentor,
+  type MentorMedia,
+  type MentorReview,
+  timeSlots,
 } from './data';
 import { colors, spacing } from './theme';
 
@@ -86,10 +88,15 @@ export type ScreenName =
 type ScreenContentProps = {
   screen: ScreenName;
   role: 'learner' | 'mentor';
-  mentor: Mentor;
+  mentor?: Mentor;
   mentors: Mentor[];
+  favoriteMentors: Mentor[];
   bookings: Booking[];
   likedIds: string[];
+  notifications: AppNotification[];
+  reviews: MentorReview[];
+  media: MentorMedia[];
+  displayName: string;
   query: string;
   category: string;
   categories: string[];
@@ -102,11 +109,20 @@ type ScreenContentProps = {
   paymentMethod: string;
   notificationTab: string;
   activeBookingsTab: string;
-  requests: string[];
+  requests: Booking[];
   availability: boolean[];
-  notificationsCleared: boolean;
+  availabilitySlots: string[];
+  dashboard: MentorDashboard | null;
+  loading: boolean;
+  actionBusy: boolean;
+  apiError: string;
+  authBusy: boolean;
+  authError: string;
+  onDismissError: () => void;
   onNavigate: (screen: ScreenName, mentorId?: string) => void;
-  onRoleChange: (role: 'learner' | 'mentor') => void;
+  onSelectRole: (role: 'learner' | 'mentor') => void;
+  onAuthenticate: (mode: 'Log In' | 'Sign Up', name: string, email: string, password: string) => void;
+  onLogout: () => void;
   onQueryChange: (value: string) => void;
   onCategoryChange: (value: string) => void;
   onToggleFilter: (value: string) => void;
@@ -122,40 +138,51 @@ type ScreenContentProps = {
   onBookingsTabChange: (tab: string) => void;
   onBooking: () => void;
   onCancelBooking: (id: string) => void;
-  onRequestDecision: (id: string) => void;
+  onRequestDecision: (id: string, decision: 'accept' | 'decline') => void;
   onToggleAvailability: (index: number) => void;
+  onSaveAvailability: (days: boolean[], slots: string[]) => Promise<boolean>;
 };
 
 const skillOptions = ['Technology', 'Business', 'Marketing', 'Finance', 'Design', 'Career', 'Leadership'];
 
 export function ScreenContent(props: ScreenContentProps) {
+  let page;
   switch (props.screen) {
-    case 'welcome': return <WelcomeScreen onNavigate={props.onNavigate} />;
-    case 'auth': return <AuthScreen onNavigate={props.onNavigate} />;
-    case 'choosePath': return <ChoosePathScreen {...props} />;
-    case 'home': return <HomeScreen {...props} />;
-    case 'explore': return <ExploreScreen {...props} />;
-    case 'filters': return <FiltersScreen {...props} />;
-    case 'notifications': return <NotificationsScreen {...props} />;
-    case 'mentorProfile': return <MentorProfileScreen {...props} />;
-    case 'media': return <MediaScreen {...props} />;
-    case 'reviews': return <ReviewsScreen {...props} />;
-    case 'selectTime': return <SelectTimeScreen {...props} />;
-    case 'payment': return <PaymentScreen {...props} />;
-    case 'confirmed': return <ConfirmedScreen {...props} />;
-    case 'bookings': return <BookingsScreen {...props} />;
-    case 'profile': return <ProfileScreen {...props} />;
-    case 'likedProfiles': return <LikedProfilesScreen {...props} />;
-    case 'profileBookings': return <BookingsScreen {...props} profileEntry />;
-    case 'profileNotifications': return <NotificationsScreen {...props} />;
-    case 'mentorDashboard': return <MentorDashboardScreen {...props} />;
-    case 'availability': return <AvailabilityScreen {...props} />;
-    case 'requests': return <RequestsScreen {...props} />;
-    case 'earnings': return <EarningsScreen {...props} />;
+    case 'welcome': page = <WelcomeScreen onNavigate={props.onNavigate} mentor={props.mentors[0]} />; break;
+    case 'auth': page = <AuthScreen {...props} />; break;
+    case 'choosePath': page = <ChoosePathScreen {...props} />; break;
+    case 'home': page = <HomeScreen {...props} />; break;
+    case 'explore': page = <ExploreScreen {...props} />; break;
+    case 'filters': page = <FiltersScreen {...props} />; break;
+    case 'notifications': page = <NotificationsScreen {...props} />; break;
+    case 'mentorProfile': page = props.mentor ? <MentorProfileScreen {...props} mentor={props.mentor} /> : <EmptyNotice label="Mentor details are not available. Return to Explore and try again." />; break;
+    case 'media': page = props.mentor ? <MediaScreen {...props} mentor={props.mentor} /> : <EmptyNotice label="Mentor details are not available. Return to Explore and try again." />; break;
+    case 'reviews': page = props.mentor ? <ReviewsScreen {...props} mentor={props.mentor} /> : <EmptyNotice label="Mentor details are not available. Return to Explore and try again." />; break;
+    case 'selectTime': page = props.mentor ? <SelectTimeScreen {...props} mentor={props.mentor} /> : <EmptyNotice label="Mentor details are not available. Return to Explore and try again." />; break;
+    case 'payment': page = props.mentor ? <PaymentScreen {...props} mentor={props.mentor} /> : <EmptyNotice label="Mentor details are not available. Return to Explore and try again." />; break;
+    case 'confirmed': page = props.mentor ? <ConfirmedScreen {...props} mentor={props.mentor} /> : <EmptyNotice label="Booking details are not available." />; break;
+    case 'bookings': page = <BookingsScreen {...props} />; break;
+    case 'profile': page = <ProfileScreen {...props} />; break;
+    case 'likedProfiles': page = <LikedProfilesScreen {...props} />; break;
+    case 'profileBookings': page = <BookingsScreen {...props} profileEntry />; break;
+    case 'profileNotifications': page = <NotificationsScreen {...props} />; break;
+    case 'mentorDashboard': page = <MentorDashboardScreen {...props} />; break;
+    case 'availability': page = <AvailabilityScreen key={props.availabilitySlots.join('|')} {...props} />; break;
+    case 'requests': page = <RequestsScreen {...props} />; break;
+    case 'earnings': page = <EarningsScreen {...props} />; break;
   }
+  return (
+    <View style={{ flex: 1 }}>
+      {props.loading ? <View style={styles.apiStatus}><ActivityIndicator size="small" color={colors.blue} /><TextLabel size={11} color={colors.secondary}>Loading your latest data…</TextLabel></View> : null}
+      {props.authBusy ? <View style={styles.apiStatus}><ActivityIndicator size="small" color={colors.blue} /><TextLabel size={11} color={colors.secondary}>Authenticating…</TextLabel></View> : null}
+      {props.apiError ? <Pressable accessibilityRole="button" onPress={props.onDismissError} style={styles.errorBanner}><TextLabel size={11} color={colors.red}>{props.apiError}</TextLabel></Pressable> : null}
+      {props.authError ? <Pressable accessibilityRole="button" onPress={props.onDismissError} style={styles.errorBanner}><TextLabel size={11} color={colors.red}>{props.authError}</TextLabel></Pressable> : null}
+      {page}
+    </View>
+  );
 }
 
-function WelcomeScreen({ onNavigate }: Pick<ScreenContentProps, 'onNavigate'>) {
+function WelcomeScreen({ onNavigate, mentor }: Pick<ScreenContentProps, 'onNavigate' | 'mentor'>) {
   return (
     <View style={styles.welcome}>
       <View style={styles.brandRow}>
@@ -168,7 +195,7 @@ function WelcomeScreen({ onNavigate }: Pick<ScreenContentProps, 'onNavigate'>) {
       <View style={styles.welcomeArtwork}>
         <View style={styles.sunGlow} />
         <View style={styles.artWaves} />
-        <View style={styles.artMentor}><Portrait mentor={allMentors[0]} height={224} /></View>
+        {mentor ? <View style={styles.artMentor}><Portrait mentor={mentor} height={224} /></View> : null}
         <View style={styles.playBadge}><Play size={21} color={colors.white} fill={colors.white} /></View>
       </View>
       <View style={styles.welcomeCopy}>
@@ -187,17 +214,21 @@ function WelcomeScreen({ onNavigate }: Pick<ScreenContentProps, 'onNavigate'>) {
   );
 }
 
-function AuthScreen({ onNavigate }: Pick<ScreenContentProps, 'onNavigate'>) {
+function AuthScreen(props: ScreenContentProps) {
   const [mode, setMode] = useState<'Log In' | 'Sign Up'>('Log In');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [notice, setNotice] = useState('');
   const emailValid = /^\S+@\S+\.\S+$/.test(email.trim());
-  const passwordValid = password.length >= 6;
+  const passwordValid = password.length >= 8;
+  const nameValid = mode === 'Log In' || name.trim().length >= 2;
   const tryContinue = () => {
     setSubmitted(true);
-    if (emailValid && passwordValid) onNavigate('choosePath');
+    if (emailValid && passwordValid && nameValid && !props.authBusy) {
+      props.onAuthenticate(mode, name.trim(), email.trim().toLowerCase(), password);
+    }
   };
   return (
     <View style={styles.auth}>
@@ -216,11 +247,20 @@ function AuthScreen({ onNavigate }: Pick<ScreenContentProps, 'onNavigate'>) {
       </TextLabel>
       <View style={styles.segmented}>
         {(['Log In', 'Sign Up'] as const).map((tab) => (
-          <Pressable key={tab} onPress={() => { setMode(tab); setSubmitted(false); }} style={[styles.segment, mode === tab && styles.segmentActive]}>
+          <Pressable key={tab} onPress={() => { setMode(tab); setSubmitted(false); setNotice(''); props.onDismissError(); }} style={[styles.segment, mode === tab && styles.segmentActive]}>
             <TextLabel size={13} color={mode === tab ? colors.blue : colors.secondary} weight={mode === tab ? '700' : '500'}>{tab}</TextLabel>
           </Pressable>
         ))}
       </View>
+      {mode === 'Sign Up' ? (
+        <TextField
+          label="Full name"
+          placeholder="Your name"
+          value={name}
+          onChangeText={setName}
+          error={submitted && !nameValid ? 'Enter at least 2 characters.' : undefined}
+        />
+      ) : null}
       <TextField
         label="Email address"
         placeholder="you@example.com"
@@ -231,17 +271,17 @@ function AuthScreen({ onNavigate }: Pick<ScreenContentProps, 'onNavigate'>) {
       />
       <TextField
         label="Password"
-        placeholder="At least 6 characters"
+        placeholder="At least 8 characters"
         value={password}
         onChangeText={setPassword}
         secureTextEntry
-        error={submitted && !passwordValid ? 'Password must be at least 6 characters.' : undefined}
+        error={submitted && !passwordValid ? 'Password must be at least 8 characters.' : undefined}
       />
       {mode === 'Log In' ? (
         <Pressable
           accessibilityRole="button"
           style={styles.forgotLink}
-          onPress={() => setNotice(emailValid ? 'Password recovery is simulated in this demo.' : 'Enter your email address to continue.')}
+          onPress={() => setNotice('Password recovery is not configured. Please contact support.')}
         >
           <TextLabel size={12} color={colors.blue} weight="600">Forgot password?</TextLabel>
         </Pressable>
@@ -251,14 +291,14 @@ function AuthScreen({ onNavigate }: Pick<ScreenContentProps, 'onNavigate'>) {
         </TextLabel>
       )}
       {notice ? <TextLabel size={11} color={colors.blue} style={{ marginBottom: 10 }}>{notice}</TextLabel> : null}
-      <Button label={mode === 'Log In' ? 'Log In' : 'Create account'} onPress={tryContinue} />
+      <Button label={mode === 'Log In' ? 'Log In' : 'Create account'} onPress={tryContinue} disabled={props.authBusy} />
       <View style={styles.orDivider}><View style={styles.divider} /><TextLabel size={11} color={colors.muted}>or continue with</TextLabel><View style={styles.divider} /></View>
       <View style={styles.socialRow}>
-        <Button variant="ghost" compact label="Google" icon={Sparkles} onPress={() => onNavigate('choosePath')} />
-        <Button variant="ghost" compact label="Apple" icon={UserRound} onPress={() => onNavigate('choosePath')} />
+        <Button variant="ghost" compact label="Google" icon={Sparkles} onPress={() => setNotice('Social sign-in is not configured. Use email and password.')} />
+        <Button variant="ghost" compact label="Apple" icon={UserRound} onPress={() => setNotice('Social sign-in is not configured. Use email and password.')} />
       </View>
       <TextLabel size={10} color={colors.secondary} style={{ textAlign: 'center', marginTop: 8 }}>
-        Social sign-in buttons continue with local demo access.
+        Social sign-in requires provider credentials that are not configured.
       </TextLabel>
       <TextLabel size={11} color={colors.secondary} style={{ textAlign: 'center', marginTop: 22 }}>
         Your next chapter can start today.
@@ -295,10 +335,8 @@ function ChoosePathScreen(props: ScreenContentProps) {
       <Button
         label={`Continue as ${selected === 'learner' ? 'Learner' : 'Mentor'}`}
         icon={ArrowRight}
-        onPress={() => {
-          props.onRoleChange(selected);
-          props.onNavigate(selected === 'learner' ? 'home' : 'mentorDashboard');
-        }}
+        onPress={() => props.onSelectRole(selected)}
+        disabled={props.actionBusy}
       />
     </View>
   );
@@ -337,7 +375,7 @@ function HomeScreen(props: ScreenContentProps) {
           <View style={styles.brandMarkSmall}><Heart size={14} color={colors.white} fill={colors.white} /></View>
           <View>
             <TextLabel size={15} weight="800" color={colors.navy}>Experience <TextLabel size={15} weight="800" color={colors.blue}>Connect</TextLabel></TextLabel>
-            <TextLabel size={9} color={colors.secondary}>Good morning, Alex</TextLabel>
+            <TextLabel size={9} color={colors.secondary}>Good morning, {props.displayName}</TextLabel>
           </View>
         </View>
         <Pressable accessibilityRole="button" accessibilityLabel="Notifications" onPress={() => props.onNavigate('notifications')} style={styles.iconButton}>
@@ -366,10 +404,10 @@ function HomeScreen(props: ScreenContentProps) {
         ))}
       </ScrollView>
       <SectionTitle title="Meet your next mentor" action="See all" onAction={() => props.onNavigate('explore')} />
-      <MentorCard mentor={allMentors[0]} onPress={() => props.onNavigate('mentorProfile', allMentors[0].id)} onLike={() => props.onToggleLike(allMentors[0].id)} liked={props.likedIds.includes(allMentors[0].id)} featured />
+      {props.mentors[0] ? <MentorCard mentor={props.mentors[0]} onPress={() => props.onNavigate('mentorProfile', props.mentors[0].id)} onLike={() => props.onToggleLike(props.mentors[0].id)} liked={props.likedIds.includes(props.mentors[0].id)} featured /> : <EmptyNotice label={props.loading ? 'Finding mentors for you…' : 'No mentors are available right now.'} />}
       <SectionTitle title="Popular this week" action="Explore" onAction={() => props.onNavigate('explore')} />
       <View style={styles.trendingGrid}>
-        {[allMentors[2], allMentors[1]].map((mentor) => (
+        {props.mentors.slice(1, 3).map((mentor) => (
           <Pressable key={mentor.id} onPress={() => props.onNavigate('mentorProfile', mentor.id)} style={styles.trendingCard}>
             <Avatar mentor={mentor} size={66} />
             <TextLabel size={12} weight="700" numberOfLines={1} style={{ marginTop: 7 }}>{mentor.name}</TextLabel>
@@ -429,7 +467,7 @@ function ExploreScreen(props: ScreenContentProps) {
           liked={props.likedIds.includes(mentor.id)}
         />
       ))}
-      {props.mentors.length === 0 ? (
+      {props.mentors.length === 0 && !props.loading ? (
         <Card style={styles.emptyState}>
           <Search size={24} color={colors.muted} />
           <TextLabel size={15} weight="700" style={{ marginTop: 12 }}>No mentors found</TextLabel>
@@ -541,11 +579,10 @@ function FiltersScreen(props: ScreenContentProps) {
 
 function NotificationsScreen(props: ScreenContentProps) {
   const tabs = ['All', 'Bookings', 'Likes', 'Messages'];
-  const filtered = notifications.filter((item) => {
-    if (props.notificationsCleared) return false;
+  const filtered = props.notifications.filter((item) => {
     if (props.notificationTab === 'All') return true;
     if (props.notificationTab === 'Likes') return item.kind === 'Updates';
-    return item.kind === props.notificationTab;
+    return `${item.kind}s` === props.notificationTab || item.kind === props.notificationTab;
   });
   return (
     <View style={styles.page}>
@@ -561,24 +598,24 @@ function NotificationsScreen(props: ScreenContentProps) {
         ))}
       </View>
       {filtered.map((item) => {
-        const person = allMentors.find((mentor) => mentor.id === item.avatarId) ?? allMentors[0];
+        const person = props.mentors.find((mentor) => mentor.id === item.avatarId);
         return (
           <Card key={item.id} style={styles.notificationCard}>
-            <Avatar mentor={person} size={44} />
+            {person ? <Avatar mentor={person} size={44} /> : <View style={styles.notificationAvatar}><Bell size={17} color={colors.blue} /></View>}
             <View style={{ flex: 1, gap: 3 }}>
               <TextLabel size={12} numberOfLines={2}><TextLabel size={12} weight="700">{item.name} </TextLabel>{item.text}</TextLabel>
               <TextLabel size={10} color={colors.secondary}>{item.time}</TextLabel>
             </View>
-            <View style={styles.unreadDot} />
+            {!item.read ? <View style={styles.unreadDot} /> : null}
           </Card>
         );
       })}
-      {filtered.length === 0 ? <EmptyNotice label={props.notificationsCleared ? 'You’re all caught up.' : 'No notifications in this tab.'} /> : null}
+      {filtered.length === 0 ? <EmptyNotice label={props.loading ? 'Loading notifications…' : 'No notifications in this tab.'} /> : null}
     </View>
   );
 }
 
-function MentorProfileScreen(props: ScreenContentProps) {
+function MentorProfileScreen(props: ScreenContentProps & { mentor: Mentor }) {
   const mentor = props.mentor;
   return (
     <View style={styles.page}>
@@ -619,53 +656,64 @@ function StatCell({ value, label }: { value: string; label: string }) {
   return <View style={styles.statCell}><TextLabel size={15} weight="800" color={colors.navy}>{value}</TextLabel><TextLabel size={10} color={colors.secondary}>{label}</TextLabel></View>;
 }
 
-function MediaScreen(props: ScreenContentProps) {
-  const [playing, setPlaying] = useState(false);
+function MediaScreen(props: ScreenContentProps & { mentor: Mentor }) {
+  const [selectedMedia, setSelectedMedia] = useState<MentorMedia | null>(null);
   const mentor = props.mentor;
+  const videos = props.media.filter((item) => item.kind === 'video');
+  const articles = props.media.filter((item) => item.kind === 'article');
+  const introduction = videos[0];
   return (
     <View style={styles.page}>
       <SectionTitle title="Introduction video" />
-      <Pressable accessibilityRole="button" accessibilityLabel={playing ? 'Pause introduction video' : 'Play introduction video'} onPress={() => setPlaying((value) => !value)} style={styles.videoCard}>
-        <Portrait mentor={mentor} height={190} />
-        <View style={styles.videoOverlay}><View style={styles.videoPlay}><Play size={20} color={colors.white} fill={colors.white} /></View></View>
-        <View style={styles.videoDuration}><TextLabel size={10} color={colors.white} weight="600">2:14</TextLabel></View>
-      </Pressable>
-      <TextLabel size={11} color={colors.secondary} style={{ marginTop: 7, marginBottom: 20 }}>{playing ? 'Playing locally · ' : ''}Meet {mentor.name.split(' ')[0]} and hear how they can help.</TextLabel>
-      <SectionTitle title="More videos" action="See all" onAction={() => setPlaying(true)} />
+      {introduction ? (
+        <>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Preview ${introduction.title}`} onPress={() => setSelectedMedia(introduction)} style={styles.videoCard}>
+            <Portrait mentor={mentor} height={190} />
+            <View style={styles.videoOverlay}><View style={styles.videoPlay}><Play size={20} color={colors.white} fill={colors.white} /></View></View>
+            {introduction.duration ? <View style={styles.videoDuration}><TextLabel size={10} color={colors.white} weight="600">{introduction.duration}</TextLabel></View> : null}
+          </Pressable>
+          <TextLabel size={11} color={colors.secondary} style={{ marginTop: 7, marginBottom: 20 }}>
+            {selectedMedia?.id === introduction.id ? 'A media URL has not been added for this item.' : introduction.description}
+          </TextLabel>
+        </>
+      ) : <EmptyNotice label={props.loading ? 'Loading mentor media…' : 'No introduction video is available.'} />}
+      <SectionTitle title="More videos" />
       <View style={styles.videoGrid}>
-        {['Growing into leadership', 'A portfolio that stands out', 'Finding your next role'].map((title, index) => (
-          <Pressable key={title} style={styles.smallVideo} onPress={() => setPlaying(true)} accessibilityRole="button">
-            <View style={[styles.smallVideoArt, { backgroundColor: [mentor.color, '#E8F0FC', '#F6ECE3'][index] }]}>
-              <Avatar mentor={allMentors[index]} size={48} />
+        {videos.slice(1).map((item) => (
+          <Pressable key={item.id} style={styles.smallVideo} onPress={() => setSelectedMedia(item)} accessibilityRole="button">
+            <View style={[styles.smallVideoArt, { backgroundColor: item.coverColor }]}>
+              <Avatar mentor={mentor} size={48} />
               <View style={styles.smallPlay}><Play size={12} color={colors.white} fill={colors.white} /></View>
             </View>
-            <TextLabel size={11} weight="600" numberOfLines={2} style={{ marginTop: 6 }}>{title}</TextLabel>
-            <TextLabel size={10} color={colors.secondary}>{[8, 12, 6][index]} min · {mentor.name.split(' ')[0]}</TextLabel>
+            <TextLabel size={11} weight="600" numberOfLines={2} style={{ marginTop: 6 }}>{item.title}</TextLabel>
+            <TextLabel size={10} color={colors.secondary}>{item.duration ?? ''} · {mentor.name.split(' ')[0]}</TextLabel>
           </Pressable>
         ))}
       </View>
       <SectionTitle title="Articles & resources" />
-      {['My guide to thoughtful career moves', 'Five ways to make your portfolio shine'].map((title) => (
-        <Card key={title} style={{ marginBottom: 9, paddingVertical: 4 }}>
-          <ListRow title={title} subtitle="A practical read · 5 min" icon={BookOpen} onPress={() => setPlaying(true)} />
+      {articles.map((item) => (
+        <Card key={item.id} style={{ marginBottom: 9, paddingVertical: 4 }}>
+          <ListRow title={item.title} subtitle={item.description} icon={BookOpen} />
         </Card>
       ))}
+      {selectedMedia && selectedMedia.id !== introduction?.id ? <TextLabel size={11} color={colors.secondary}>{selectedMedia.url ? 'Open this resource from its configured source.' : 'A media URL has not been added for this item.'}</TextLabel> : null}
     </View>
   );
 }
 
-function ReviewsScreen(props: ScreenContentProps) {
-  const ratingBars = [83, 12, 4, 1, 0];
+function ReviewsScreen(props: ScreenContentProps & { mentor: Mentor }) {
+  const ratingCounts = [5, 4, 3, 2, 1].map((rating) => props.reviews.filter((review) => review.rating === rating).length);
+  const total = props.reviews.length;
   return (
     <View style={styles.page}>
       <Card style={styles.ratingOverview}>
         <View style={styles.bigRating}><TextLabel size={38} weight="800">{props.mentor.rating.toFixed(1)}</TextLabel><Rating value={props.mentor.rating} /><TextLabel size={10} color={colors.secondary}>{props.mentor.reviews} verified reviews</TextLabel></View>
         <View style={{ flex: 1, gap: 7 }}>
-          {ratingBars.map((value, index) => (
+          {ratingCounts.map((count, index) => (
             <View key={index} style={styles.ratingBarRow}>
               <TextLabel size={10} color={colors.secondary}>{5 - index} ★</TextLabel>
-              <View style={styles.ratingTrack}><View style={[styles.ratingFill, { width: `${value}%` }]} /></View>
-              <TextLabel size={10} color={colors.secondary}>{value}%</TextLabel>
+              <View style={styles.ratingTrack}><View style={[styles.ratingFill, { width: `${total ? Math.round(count / total * 100) : 0}%` }]} /></View>
+              <TextLabel size={10} color={colors.secondary}>{count}</TextLabel>
             </View>
           ))}
         </View>
@@ -674,26 +722,23 @@ function ReviewsScreen(props: ScreenContentProps) {
         <TextLabel size={13} weight="700">Learners love {props.mentor.name.split(' ')[0]}</TextLabel>
         <Chip label="Most helpful" selected />
       </View>
-      {[
-        { name: 'Maya R.', initials: 'MR', text: 'An incredibly thoughtful mentor. I left with a clear plan and the confidence to make my next move.', time: '2 weeks ago' },
-        { name: 'Arjun K.', initials: 'AK', text: 'Practical advice, generous with their time, and genuinely interested in helping me succeed.', time: '1 month ago' },
-        { name: 'Sofia L.', initials: 'SL', text: 'The portfolio feedback was detailed and immediately useful. Highly recommend booking a session.', time: '1 month ago' },
-      ].map((review, index) => (
+      {props.reviews.map((review, index) => (
         <Card key={review.name} style={styles.reviewCard}>
           <View style={styles.reviewHeader}>
             <View style={[styles.initialAvatar, { backgroundColor: ['#DFEAF7', '#F7EADD', '#EBE5F7'][index] }]}><TextLabel size={12} weight="700" color={colors.navy}>{review.initials}</TextLabel></View>
             <View style={{ flex: 1 }}><TextLabel size={12} weight="700">{review.name}</TextLabel><TextLabel size={10} color={colors.secondary}>{review.time}</TextLabel></View>
-            <Rating value={5} />
+            <Rating value={review.rating} />
           </View>
           <TextLabel size={12} color={colors.secondary} style={{ marginTop: 11 }}>{review.text}</TextLabel>
-          <TextLabel size={10} color={colors.green} weight="600" style={{ marginTop: 9 }}>✓ Verified consultation</TextLabel>
+          {review.verified ? <TextLabel size={10} color={colors.green} weight="600" style={{ marginTop: 9 }}>✓ Verified consultation</TextLabel> : null}
         </Card>
       ))}
+      {props.reviews.length === 0 ? <EmptyNotice label={props.loading ? 'Loading reviews…' : 'No written reviews are available yet.'} /> : null}
     </View>
   );
 }
 
-function SelectTimeScreen(props: ScreenContentProps) {
+function SelectTimeScreen(props: ScreenContentProps & { mentor: Mentor }) {
   return (
     <View style={styles.page}>
       <Card style={styles.bookingMentor}>
@@ -734,7 +779,7 @@ function SelectTimeScreen(props: ScreenContentProps) {
   );
 }
 
-function PaymentScreen(props: ScreenContentProps) {
+function PaymentScreen(props: ScreenContentProps & { mentor: Mentor }) {
   return (
     <View style={styles.page}>
       <SectionTitle title="Booking summary" />
@@ -746,7 +791,7 @@ function PaymentScreen(props: ScreenContentProps) {
         </View>
       </Card>
       <Card style={styles.detailCard}>
-        <SummaryRow label="Date & time" value={`${weekdays[props.selectedDate].day}, ${weekdays[props.selectedDate].date} May · ${props.selectedTime}`} />
+        <SummaryRow label="Date & time" value={`${formatDate(weekdays[props.selectedDate].isoDate)} · ${props.selectedTime}`} />
         <SummaryRow label="Duration" value="30 minutes" />
         <SummaryRow label="Consultation fee" value={`$${props.mentor.price}.00`} />
         <SummaryRow label="Platform fee" value="$0.00" />
@@ -767,7 +812,7 @@ function PaymentScreen(props: ScreenContentProps) {
       ))}
       <View style={styles.secureNotice}><ShieldCheck size={16} color={colors.green} /><TextLabel size={10} color={colors.secondary}>Your payment details stay private. This is a local demo checkout.</TextLabel></View>
       <View style={{ flex: 1, minHeight: 15 }} />
-      <Button label={`Pay $${props.mentor.price}.00`} icon={LockKeyhole} onPress={props.onBooking} />
+      <Button label={`Confirm booking · $${props.mentor.price}.00`} icon={LockKeyhole} onPress={props.onBooking} disabled={props.actionBusy} />
       <TextLabel size={10} color={colors.secondary} style={{ textAlign: 'center', marginTop: 9 }}>No payment will be processed.</TextLabel>
     </View>
   );
@@ -786,7 +831,7 @@ function SummaryRow({ label, value, strong }: { label: string; value: string; st
   );
 }
 
-function ConfirmedScreen(props: ScreenContentProps) {
+function ConfirmedScreen(props: ScreenContentProps & { mentor: Mentor }) {
   const [calendarAdded, setCalendarAdded] = useState(false);
   return (
     <View style={styles.confirmedPage}>
@@ -798,7 +843,7 @@ function ConfirmedScreen(props: ScreenContentProps) {
       <Card style={styles.confirmationCard}>
         <View style={styles.confirmationMentor}><Avatar mentor={props.mentor} size={48} /><View style={{ marginLeft: 10 }}><TextLabel size={13} weight="700">{props.mentor.name}</TextLabel><TextLabel size={11} color={colors.secondary}>{props.mentor.role}</TextLabel></View></View>
         <View style={styles.hairline} />
-        <SummaryRow label="Date" value={`${weekdays[props.selectedDate].day}, ${weekdays[props.selectedDate].date} May`} />
+        <SummaryRow label="Date" value={formatDate(weekdays[props.selectedDate].isoDate)} />
         <SummaryRow label="Time" value={props.selectedTime} />
         <SummaryRow label="Duration" value="30 minutes" />
         <SummaryRow label="Location" value="Video call" />
@@ -829,7 +874,8 @@ function BookingsScreen(props: ScreenContentProps & { profileEntry?: boolean }) 
         ))}
       </View>
       {filtered.map((booking) => {
-        const mentor = allMentors.find((item) => item.id === booking.mentorId) ?? allMentors[0];
+        const mentor = booking.mentor ?? props.mentors.find((item) => item.id === booking.mentorId);
+        if (!mentor) return null;
         return (
           <Card key={booking.id} style={styles.bookingCard}>
             <View style={styles.bookingTop}><Avatar mentor={mentor} size={48} /><View style={{ flex: 1, marginLeft: 10 }}><TextLabel size={13} weight="700">{mentor.name}</TextLabel><TextLabel size={11} color={colors.secondary}>{booking.topic}</TextLabel></View><View style={[styles.statusPill, booking.status === 'Cancelled' && styles.statusPillCancelled]}><TextLabel size={9} color={booking.status === 'Cancelled' ? colors.red : colors.green} weight="700">{booking.status}</TextLabel></View></View>
@@ -838,7 +884,7 @@ function BookingsScreen(props: ScreenContentProps & { profileEntry?: boolean }) 
               {booking.status === 'Upcoming' ? (
                 <>
                   <Button compact label="Reschedule" variant="secondary" onPress={() => props.onNavigate('selectTime', mentor.id)} />
-                  <Button compact label="Cancel" variant="ghost" onPress={() => props.onCancelBooking(booking.id)} />
+                  <Button compact label="Cancel" variant="ghost" disabled={props.actionBusy} onPress={() => props.onCancelBooking(booking.id)} />
                 </>
               ) : (
                 <Button compact label={booking.status === 'Cancelled' ? 'Book again' : 'View details'} variant="secondary" onPress={() => props.onNavigate('mentorProfile', mentor.id)} />
@@ -856,23 +902,24 @@ function BookingsScreen(props: ScreenContentProps & { profileEntry?: boolean }) 
 
 function ProfileScreen(props: ScreenContentProps) {
   const [showSwitchHint, setShowSwitchHint] = useState(false);
+  const initials = props.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   return (
     <View style={styles.page}>
       <View style={styles.profileAccount}>
-        <View style={styles.selfAvatar}><TextLabel size={20} weight="800" color={colors.blue}>AS</TextLabel></View>
-        <View style={{ flex: 1, marginLeft: 13 }}><TextLabel size={16} weight="800">Alex Morgan</TextLabel><TextLabel size={11} color={colors.secondary}>Learner · Member since 2024</TextLabel></View>
+        <View style={styles.selfAvatar}><TextLabel size={20} weight="800" color={colors.blue}>{initials || 'U'}</TextLabel></View>
+        <View style={{ flex: 1, marginLeft: 13 }}><TextLabel size={16} weight="800">{props.displayName}</TextLabel><TextLabel size={11} color={colors.secondary}>{props.role === 'learner' ? 'Learner' : 'Mentor'} account</TextLabel></View>
         <Pressable accessibilityRole="button" accessibilityLabel="Edit profile" onPress={() => setShowSwitchHint(true)} style={styles.editIcon}><UserRound size={17} color={colors.blue} /></Pressable>
       </View>
-      {showSwitchHint ? <TextLabel size={11} color={colors.green} style={{ marginBottom: 12 }}>Your demo profile is ready to explore.</TextLabel> : null}
+      {showSwitchHint ? <TextLabel size={11} color={colors.green} style={{ marginBottom: 12 }}>Profile editing is not available yet.</TextLabel> : null}
       <SectionTitle title="Your account" />
       <Card style={styles.menuCard}>
         <ListRow title="My bookings" subtitle="Upcoming and past sessions" icon={CalendarDays} onPress={() => props.onNavigate('profileBookings')} />
         <View style={styles.hairline} />
         <ListRow title="Liked profiles" subtitle={`${props.likedIds.length} mentors saved`} icon={Heart} onPress={() => props.onNavigate('likedProfiles')} />
         <View style={styles.hairline} />
-        <ListRow title="Saved resources" subtitle="Articles and videos to revisit" icon={BookOpen} onPress={() => props.onNavigate('media', allMentors[0].id)} />
+        <ListRow title="Saved resources" subtitle="Articles and videos to revisit" icon={BookOpen} onPress={() => props.favoriteMentors[0] && props.onNavigate('media', props.favoriteMentors[0].id)} />
         <View style={styles.hairline} />
-        <ListRow title="Reviews" subtitle="Share your learning experience" icon={Star} onPress={() => props.onNavigate('reviews', allMentors[0].id)} />
+        <ListRow title="Reviews" subtitle="Share your learning experience" icon={Star} onPress={() => props.favoriteMentors[0] && props.onNavigate('reviews', props.favoriteMentors[0].id)} />
       </Card>
       <SectionTitle title="Preferences" />
       <Card style={styles.menuCard}>
@@ -882,16 +929,22 @@ function ProfileScreen(props: ScreenContentProps) {
         <View style={styles.hairline} />
         <ListRow title="Settings" subtitle="Account and privacy" icon={LockKeyhole} onPress={() => setShowSwitchHint(true)} />
       </Card>
-      <Button label="Switch to mentor dashboard" icon={Briefcase} variant="secondary" onPress={() => { props.onRoleChange('mentor'); props.onNavigate('mentorDashboard'); }} />
-      <Pressable accessibilityRole="button" onPress={() => props.onNavigate('welcome')} style={styles.signOut}>
-        <TextLabel size={12} color={colors.red} weight="600">Sign out of demo</TextLabel>
+      <Button
+        label={props.role === 'learner' ? 'Switch to mentor dashboard' : 'Switch to learner experience'}
+        icon={Briefcase}
+        variant="secondary"
+        disabled={props.actionBusy}
+        onPress={() => props.onSelectRole(props.role === 'learner' ? 'mentor' : 'learner')}
+      />
+      <Pressable accessibilityRole="button" onPress={props.onLogout} style={styles.signOut} disabled={props.actionBusy}>
+        <TextLabel size={12} color={colors.red} weight="600">Sign out</TextLabel>
       </Pressable>
     </View>
   );
 }
 
 function LikedProfilesScreen(props: ScreenContentProps) {
-  const liked = allMentors.filter((mentor) => props.likedIds.includes(mentor.id));
+  const liked = props.favoriteMentors;
   return (
     <View style={styles.page}>
       <TextLabel size={13} color={colors.secondary} style={{ marginBottom: 14 }}>Mentors you’ve saved for later.</TextLabel>
@@ -903,23 +956,24 @@ function LikedProfilesScreen(props: ScreenContentProps) {
 }
 
 function MentorDashboardScreen(props: ScreenContentProps) {
-  const upcoming = props.bookings.filter((booking) => booking.status === 'Upcoming').length;
+  const dashboard = props.dashboard;
+  const initials = props.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   return (
     <View style={styles.page}>
       <View style={styles.dashboardHeader}>
-        <View style={styles.selfAvatar}><TextLabel size={17} weight="800" color={colors.blue}>RS</TextLabel></View>
-        <View style={{ flex: 1, marginLeft: 11 }}><TextLabel size={16} weight="800">Hello, Rahul</TextLabel><TextLabel size={11} color={colors.secondary}>Ready to make an impact?</TextLabel></View>
+        <View style={styles.selfAvatar}><TextLabel size={17} weight="800" color={colors.blue}>{initials || 'M'}</TextLabel></View>
+        <View style={{ flex: 1, marginLeft: 11 }}><TextLabel size={16} weight="800">Hello, {props.displayName}</TextLabel><TextLabel size={11} color={colors.secondary}>Ready to make an impact?</TextLabel></View>
         <Pressable accessibilityRole="button" accessibilityLabel="Notifications" onPress={() => props.onNavigate('notifications')}><Bell size={18} color={colors.navy} /></Pressable>
       </View>
       <Card style={styles.earningsHero}>
         <TextLabel size={11} color="#E3ECFF">Your earnings this month</TextLabel>
-        <TextLabel size={29} weight="800" color={colors.white} style={{ marginTop: 3 }}>$2,450</TextLabel>
-        <TextLabel size={10} color="#D3E1FF" style={{ marginTop: 4 }}>↑ 12% from last month</TextLabel>
-        <View style={styles.earningsHeroBottom}><TextLabel size={10} color={colors.white}>8 sessions completed</TextLabel><ArrowRight size={15} color={colors.white} /></View>
+        <TextLabel size={29} weight="800" color={colors.white} style={{ marginTop: 3 }}>${(dashboard?.earningsThisMonth ?? 0).toFixed(2)}</TextLabel>
+        <TextLabel size={10} color="#D3E1FF" style={{ marginTop: 4 }}>Based on completed consultations</TextLabel>
+        <View style={styles.earningsHeroBottom}><TextLabel size={10} color={colors.white}>{dashboard?.completedCount ?? 0} completed sessions</TextLabel><ArrowRight size={15} color={colors.white} /></View>
       </Card>
       <View style={styles.dashboardStats}>
-        <MetricCard label="Upcoming" value={`${upcoming}`} sub="sessions" Icon={CalendarCheck} />
-        <MetricCard label="Rating" value="4.9" sub="128 reviews" Icon={Star} />
+        <MetricCard label="Upcoming" value={`${dashboard?.upcomingCount ?? 0}`} sub="sessions" Icon={CalendarCheck} />
+        <MetricCard label="Rating" value={(dashboard?.rating ?? 0).toFixed(1)} sub={`${dashboard?.reviews ?? 0} reviews`} Icon={Star} />
       </View>
       <SectionTitle title="Quick actions" />
       <Card style={styles.menuCard}>
@@ -931,7 +985,7 @@ function MentorDashboardScreen(props: ScreenContentProps) {
       </Card>
       <SectionTitle title="Upcoming sessions" action="See all" onAction={() => props.onNavigate('bookings')} />
       <BookingPreview booking={props.bookings.find((booking) => booking.status === 'Upcoming')} onPress={() => props.onNavigate('bookings')} />
-      <Button label="Preview learner experience" variant="secondary" onPress={() => { props.onRoleChange('learner'); props.onNavigate('home'); }} />
+      <Button label="Preview learner experience" variant="secondary" onPress={() => props.onSelectRole('learner')} disabled={props.actionBusy} />
     </View>
   );
 }
@@ -942,7 +996,8 @@ function MetricCard({ label, value, sub, Icon }: { label: string; value: string;
 
 function BookingPreview({ booking, onPress }: { booking?: Booking; onPress: () => void }) {
   if (!booking) return <EmptyNotice label="No upcoming sessions scheduled." />;
-  const mentor = allMentors.find((person) => person.id === booking.mentorId) ?? allMentors[0];
+  const mentor = booking.mentor;
+  if (!mentor) return <EmptyNotice label="Session details are unavailable." />;
   return (
     <Card style={{ marginBottom: 17 }}>
       <View style={styles.bookingTop}><Avatar mentor={mentor} size={43} /><View style={{ flex: 1, marginLeft: 10 }}><TextLabel size={12} weight="700">{mentor.name}</TextLabel><TextLabel size={10} color={colors.secondary}>{booking.date} · {booking.time}</TextLabel></View><ChevronRight size={15} color={colors.muted} /></View>
@@ -953,7 +1008,7 @@ function BookingPreview({ booking, onPress }: { booking?: Booking; onPress: () =
 
 function AvailabilityScreen(props: ScreenContentProps) {
   const [saved, setSaved] = useState(false);
-  const [selectedSlots, setSelectedSlots] = useState(['9:00–10:00 AM', '10:00–11:00 AM']);
+  const [selectedSlots, setSelectedSlots] = useState(props.availabilitySlots);
   const toggleSlot = (slot: string) => setSelectedSlots((current) => current.includes(slot) ? current.filter((item) => item !== slot) : [...current, slot]);
   return (
     <View style={styles.page}>
@@ -962,7 +1017,7 @@ function AvailabilityScreen(props: ScreenContentProps) {
       <Card style={{ marginBottom: 18 }}>
         {weekdays.map((item, index) => (
           <View key={item.day} style={styles.dayRow}>
-            <View style={styles.dayName}><TextLabel size={12} weight="600">{item.day}</TextLabel><TextLabel size={10} color={colors.secondary}>{item.date} May</TextLabel></View>
+            <View style={styles.dayName}><TextLabel size={12} weight="600">{item.day}</TextLabel><TextLabel size={10} color={colors.secondary}>{shortDate(item.isoDate)}</TextLabel></View>
             <View style={styles.dayToggle}><TextLabel size={10} color={props.availability[index] ? colors.green : colors.secondary}>{props.availability[index] ? 'Available' : 'Off'}</TextLabel><Switch value={props.availability[index]} onValueChange={() => props.onToggleAvailability(index)} trackColor={{ false: colors.border, true: colors.blue }} /></View>
           </View>
         ))}
@@ -972,28 +1027,38 @@ function AvailabilityScreen(props: ScreenContentProps) {
         {['9:00–10:00 AM', '10:00–11:00 AM', '1:00–2:00 PM', '2:30–3:30 PM', '4:00–5:00 PM'].map((slot) => <Chip key={slot} label={slot} selected={selectedSlots.includes(slot)} onPress={() => toggleSlot(slot)} />)}
       </View>
       <View style={{ flex: 1, minHeight: 25 }} />
-      {saved ? <TextLabel size={12} color={colors.green} weight="600" style={{ textAlign: 'center', marginBottom: 10 }}>Availability updated in this demo.</TextLabel> : null}
-      <Button label="Save availability" onPress={() => setSaved(true)} />
+      {saved ? <TextLabel size={12} color={colors.green} weight="600" style={{ textAlign: 'center', marginBottom: 10 }}>Availability saved.</TextLabel> : null}
+      <Button
+        label="Save availability"
+        disabled={props.actionBusy}
+        onPress={() => {
+          setSaved(false);
+          void props.onSaveAvailability(props.availability, selectedSlots).then((success) => {
+            if (success) setSaved(true);
+          });
+        }}
+      />
     </View>
   );
 }
 
 function RequestsScreen(props: ScreenContentProps) {
-  const visibleRequests = requestSeed.filter((request) => props.requests.includes(request.id));
+  const visibleRequests = props.requests;
   return (
     <View style={styles.page}>
       <TextLabel size={12} color={colors.secondary} style={{ marginBottom: 17 }}>Connect with learners who are ready to grow.</TextLabel>
       <SectionTitle title={`New requests (${visibleRequests.length})`} />
       {visibleRequests.map((request) => {
-        const mentor = allMentors.find((person) => person.id === request.mentorId) ?? allMentors[0];
+        const learnerName = request.learner?.name ?? 'Learner';
+        const initials = learnerName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
         return (
           <Card key={request.id} style={styles.requestCard}>
-            <View style={styles.bookingTop}><Avatar mentor={mentor} size={46} /><View style={{ flex: 1, marginLeft: 10 }}><TextLabel size={13} weight="700">{mentor.name}</TextLabel><TextLabel size={10} color={colors.secondary}>Learner · {request.date}</TextLabel></View></View>
+            <View style={styles.bookingTop}><View style={styles.requestAvatar}><TextLabel size={12} weight="700" color={colors.blue}>{initials}</TextLabel></View><View style={{ flex: 1, marginLeft: 10 }}><TextLabel size={13} weight="700">{learnerName}</TextLabel><TextLabel size={10} color={colors.secondary}>Learner · {request.date} · {request.time}</TextLabel></View></View>
             <TextLabel size={12} weight="600" style={{ marginTop: 12 }}>{request.topic}</TextLabel>
             <TextLabel size={11} color={colors.secondary} style={{ marginTop: 4 }}>30-minute career consultation · Video call</TextLabel>
             <View style={styles.requestActions}>
-              <Button compact label="Accept" icon={Check} onPress={() => props.onRequestDecision(request.id)} />
-              <Button compact label="Decline" icon={X} variant="ghost" onPress={() => props.onRequestDecision(request.id)} />
+              <Button compact label="Accept" icon={Check} disabled={props.actionBusy} onPress={() => props.onRequestDecision(request.id, 'accept')} />
+              <Button compact label="Decline" icon={X} variant="ghost" disabled={props.actionBusy} onPress={() => props.onRequestDecision(request.id, 'decline')} />
             </View>
           </Card>
         );
@@ -1003,65 +1068,44 @@ function RequestsScreen(props: ScreenContentProps) {
   );
 }
 
-const earningsPeriods = {
-  'This month': {
-    total: '$2,450',
-    trend: '↑ 12.8%',
-    comparison: 'compared to last month',
-    sessions: '8 sessions',
-    range: 'May 1 – 31',
-    chart: [45, 64, 52, 82, 58, 92, 68, 55, 77, 50, 87, 66],
-  },
-  'Last month': {
-    total: '$2,173',
-    trend: '↑ 8.2%',
-    comparison: 'compared to April',
-    sessions: '7 sessions',
-    range: 'Apr 1 – 30',
-    chart: [38, 54, 72, 46, 63, 81, 44, 72, 61, 88, 52, 70],
-  },
-  'All time': {
-    total: '$8,640',
-    trend: '54 sessions',
-    comparison: 'earned while mentoring',
-    sessions: 'Since Jan 2024',
-    range: 'Jan – May',
-    chart: [35, 49, 58, 74, 52, 86, 65, 77, 56, 91, 73, 99],
-  },
-};
-const earningPeriodNames: (keyof typeof earningsPeriods)[] = ['This month', 'Last month', 'All time'];
+const earningPeriodNames = ['This month', 'Last month', 'All time'] as const;
 
 function EarningsScreen(props: ScreenContentProps) {
-  const [period, setPeriod] = useState<keyof typeof earningsPeriods>('This month');
-  const summary = earningsPeriods[period];
+  const [period, setPeriod] = useState<(typeof earningPeriodNames)[number]>('This month');
+  const dashboard = props.dashboard;
+  const total = period === 'This month'
+    ? dashboard?.earningsThisMonth
+    : period === 'Last month'
+      ? dashboard?.earningsLastMonth
+      : dashboard?.earningsAllTime;
+  const recent = props.bookings.filter((booking) => booking.status === 'Past').slice(0, 3);
   return (
     <View style={styles.page}>
       <Card style={styles.earningsCard}>
-        <View style={styles.earningsTop}><View><TextLabel size={11} color={colors.secondary}>Total earnings</TextLabel><TextLabel size={27} weight="800" style={{ marginTop: 2 }}>{summary.total}</TextLabel></View><View style={styles.earningsIcon}><CircleDollarSign size={22} color={colors.blue} /></View></View>
-        <View style={styles.earningsFooter}><TextLabel size={10} color={colors.green} weight="700">{summary.trend}</TextLabel><TextLabel size={10} color={colors.secondary}> {summary.comparison}</TextLabel><View style={{ flex: 1 }} /><TextLabel size={11} color={colors.secondary}>{summary.sessions}</TextLabel></View>
+        <View style={styles.earningsTop}><View><TextLabel size={11} color={colors.secondary}>Earnings · {period.toLowerCase()}</TextLabel><TextLabel size={27} weight="800" style={{ marginTop: 2 }}>${(total ?? 0).toFixed(2)}</TextLabel></View><View style={styles.earningsIcon}><CircleDollarSign size={22} color={colors.blue} /></View></View>
+        <View style={styles.earningsFooter}><TextLabel size={10} color={colors.secondary}>{dashboard?.completedCount ?? 0} completed sessions</TextLabel><View style={{ flex: 1 }} /><TextLabel size={11} color={colors.secondary}>{props.loading ? 'Updating…' : 'Based on bookings'}</TextLabel></View>
       </Card>
       <View style={styles.periodTabs}>
         {earningPeriodNames.map((item) => <Chip key={item} label={item} selected={period === item} onPress={() => setPeriod(item)} />)}
       </View>
-      <SectionTitle title="Earnings overview" />
-      <Card style={{ marginBottom: 18 }}>
-        <View style={styles.chartHeader}><TextLabel size={12} weight="600">Session earnings</TextLabel><TextLabel size={10} color={colors.secondary}>{summary.range}</TextLabel></View>
-        <View style={styles.chart}>
-          {summary.chart.map((height, index) => <View key={index} style={styles.chartColumn}><View style={[styles.chartBar, { height }]} /><TextLabel size={8} color={colors.muted}>{['1','3','5','7','9','11','13','15','17','19','21','23'][index]}</TextLabel></View>)}
-        </View>
-        <View style={styles.chartLabels}><TextLabel size={9} color={colors.muted}>$0</TextLabel><TextLabel size={9} color={colors.muted}>$500</TextLabel><TextLabel size={9} color={colors.muted}>$1,000</TextLabel></View>
-      </Card>
-      <SectionTitle title="Recent activity" action="View all" onAction={() => props.onNavigate('bookings')} />
-      {[
-        { name: 'Rahul Sharma', amount: '+$49.00', time: 'Today · 10:30 AM', id: 'rahul-sharma' },
-        { name: 'Priya Singh', amount: '+$39.00', time: 'May 08 · 2:00 PM', id: 'priya-singh' },
-        { name: 'Amara Okafor', amount: '+$55.00', time: 'May 04 · 11:00 AM', id: 'amara-okafor' },
-      ].map((item) => {
-        const mentor = allMentors.find((person) => person.id === item.id) ?? allMentors[0];
-        return <Card key={item.name} style={styles.activityCard}><Avatar mentor={mentor} size={40} /><View style={{ flex: 1, marginLeft: 10 }}><TextLabel size={12} weight="700">{item.name}</TextLabel><TextLabel size={10} color={colors.secondary}>{item.time}</TextLabel></View><TextLabel size={12} color={colors.green} weight="700">{item.amount}</TextLabel></Card>;
-      })}
+      <SectionTitle title="Completed consultations" action="View all" onAction={() => props.onNavigate('bookings')} />
+      {recent.map((booking) => (
+        <Card key={booking.id} style={styles.activityCard}>
+          <View style={styles.requestAvatar}><TextLabel size={12} weight="700" color={colors.blue}>{booking.learner?.name.slice(0, 1) ?? 'L'}</TextLabel></View>
+          <View style={{ flex: 1, marginLeft: 10 }}><TextLabel size={12} weight="700">{booking.learner?.name ?? 'Learner'}</TextLabel><TextLabel size={10} color={colors.secondary}>{booking.date} · {booking.time}</TextLabel></View>
+          <TextLabel size={12} color={colors.green} weight="700">${booking.price.toFixed(2)}</TextLabel>
+        </Card>
+      ))}
+      {recent.length === 0 ? <EmptyNotice label={props.loading ? 'Loading completed sessions…' : 'Completed sessions will appear here.'} /> : null}
       <SectionTitle title="Recent reviews" />
-      <Card style={styles.reviewCard}><Rating value={5} /><TextLabel size={12} color={colors.secondary} style={{ marginTop: 8 }}>“A genuinely helpful session that gave me a clear direction.”</TextLabel><TextLabel size={10} weight="600" style={{ marginTop: 7 }}>— Maya R.</TextLabel></Card>
+      {dashboard?.recentReviews.map((review) => (
+        <Card key={review.id} style={styles.reviewCard}>
+          <Rating value={review.rating} />
+          <TextLabel size={12} color={colors.secondary} style={{ marginTop: 8 }}>{review.text}</TextLabel>
+          <TextLabel size={10} weight="600" style={{ marginTop: 7 }}>— {review.name}</TextLabel>
+        </Card>
+      ))}
+      {!dashboard?.recentReviews.length ? <EmptyNotice label="No reviews have been submitted yet." /> : null}
     </View>
   );
 }
@@ -1073,6 +1117,21 @@ function EmptyNotice({ label }: { label: string }) {
       <TextLabel size={12} color={colors.secondary} style={{ textAlign: 'center', marginTop: 6 }}>{label}</TextLabel>
     </Card>
   );
+}
+
+function formatDate(value: string): string {
+  return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function shortDate(value: string): string {
+  return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 const styles = StyleSheet.create({
@@ -1132,7 +1191,11 @@ const styles = StyleSheet.create({
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, marginBottom: 15 },
   filterButtons: { flexDirection: 'row', gap: 10, marginTop: 'auto' },
   notificationCard: { flexDirection: 'row', alignItems: 'center', gap: 11, padding: 11, marginBottom: 9 },
+  notificationAvatar: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.paleBlue, alignItems: 'center', justifyContent: 'center' },
   unreadDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.blue },
+  apiStatus: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 8 },
+  errorBanner: { borderRadius: 10, backgroundColor: colors.paleRed, padding: 10, marginBottom: 10 },
+  requestAvatar: { width: 46, height: 46, borderRadius: 15, backgroundColor: colors.paleBlue, alignItems: 'center', justifyContent: 'center' },
   profileHero: { position: 'relative', marginHorizontal: -spacing.page, marginTop: -spacing.md },
   profileHeart: { position: 'absolute', right: 14, top: 13, width: 39, height: 39, borderRadius: 20, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' },
   profileSummary: { marginTop: -1, marginBottom: 20, borderTopLeftRadius: 0, borderTopRightRadius: 0 },
